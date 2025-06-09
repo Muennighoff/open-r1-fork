@@ -1,0 +1,59 @@
+# Model arguments
+model_name_or_path: Qwen/Qwen2.5-1.5B-Instruct
+model_revision: main
+torch_dtype: bfloat16
+attn_implementation: flash_attention_2
+
+# Data training arguments
+dataset_name: simplescaling/openaimath
+dataset_prompt_column: problem
+# system_prompt: "You are a helpful AI Assistant that provides well-reasoned and detailed responses. You first think about the reasoning process as an internal monologue and then provide the user with the answer. Respond in the following format: <think>\n...\n</think>\n<answer>\n...\n</answer>"
+
+# GRPO trainer config
+beta: 0.0 # Default is 0.04
+mask_truncated_completions: true
+bf16: true
+use_vllm: true
+do_eval: false
+gradient_accumulation_steps: 16
+gradient_checkpointing: true
+gradient_checkpointing_kwargs:
+  use_reentrant: false
+hub_model_id: Muennighoff/Qwen2.5-1.5B-hl-false-v3
+hub_strategy: every_save
+learning_rate: 1e-6
+log_completions: true
+log_level: info
+logging_first_step: true
+logging_steps: 1
+logging_strategy: steps
+lr_scheduler_type: constant
+max_prompt_length: 512
+max_completion_length: 4096
+max_steps: 1600
+num_generations: 8
+output_dir: data/Qwen2.5-1.5B-hl-false-v3
+overwrite_output_dir: true
+per_device_eval_batch_size: 8
+per_device_train_batch_size: 8
+push_to_hub: true
+report_to:
+- wandb
+wandb_entity: Muennighoff
+wandb_project: halos
+reward_funcs:
+- simpleverify
+reward_weights:
+- 1.0
+save_strategy: "steps"
+save_steps: 160
+save_total_limit: 1
+seed: 42
+temperature: 0.7
+warmup_ratio: 0.1
+humanline: false
+num_iterations: 4
+num_completions_to_print: 1
+# sync_ref_model: true
+# ref_model_mixup_alpha: 1.0 # Update by 100%
+# ref_model_sync_steps: 1

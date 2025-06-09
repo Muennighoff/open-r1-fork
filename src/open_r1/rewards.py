@@ -19,11 +19,13 @@ import asyncio
 import json
 import math
 import re
+from collections import defaultdict
 from functools import partial, update_wrapper
 from typing import Callable, Dict, Literal, Optional
 
 from latex2sympy2_extended import NormalizationConfig
 from math_verify import LatexExtractionConfig, parse, verify
+import simpleverify
 
 from .utils.code_providers import get_provider
 from .utils.competitive_programming import (
@@ -37,11 +39,66 @@ from .utils.competitive_programming import score_submission as cf_score_submissi
 from .utils.competitive_programming import score_subtask
 
 
+def simpleverify_reward(completions, solution, **kwargs):
+    """Reward function that checks if the completion is the same as the ground truth."""
+    if "answer" in kwargs:
+        solution = kwargs["answer"]
+    contents = [completion[0]["content"] for completion in completions]
+
+    # Group by domains to take advantage of simpleverify's caching
+    domains = kwargs.get("domain", ["math"] * len(contents))
+    domain_to_indices = defaultdict(list)
+    for i, domain in enumerate(domains):
+        domain_to_indices[domain].append(i)
+    rewards = [None] * len(completions)
+
+    for domain, indices in domain_to_indices.items():
+        grouped_contents = [contents[i] for i in indices]
+        grouped_solution = [solution[i] for i in indices]
+
+        if domain == "math":
+            verified = simpleverify.verify_math(grouped_contents, grouped_solution, sep="</think>")
+        elif domain == "code":
+            verified = simpleverify.verify_code(grouped_contents, grouped_solution, sep="</think>")
+        elif domain == "crossword":
+            verified = simpleverify.verify_crossword(
+                grouped_contents,
+                grouped_solution,
+                force_boxed=True,
+                force_sep=True,
+                sep="</think>",
+            )
+        else:
+            verified = simpleverify.verify_generic(
+                grouped_contents, grouped_solution,
+                p=simpleverify.SHORT_MATCH_PROMPT,
+                # Force boxed because
+                # a) speeds up verification
+                # b) teach the model to use boxed as
+                # b.1) easy to understand format, also oai uses
+                # b.2) makes evals easier (and lets others more easily eval our model)
+                # c) only problems with short answers anyways for now
+                force_boxed=True,
+                sep="</think>"
+            )
+
+        for idx, r in zip(indices, verified):
+            rewards[idx] = r[0]
+    return rewards
+
 def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str], **kwargs) -> list[Optional[float]]:
     """Reward function that checks if the completion is the same as the ground truth."""
     contents = [completion[0]["content"] for completion in completions]
     rewards = []
-    for content, sol in zip(contents, solution):
+    if "answer" in kwargs:
+        solution = kwargs["answer"]
+    for i, (content, sol) in enumerate(zip(contents, solution)):
+        # if "completion_ids" in kwargs and kwargs["completion_ids"][i][-1] != 151643:
+        #     # Skip if no EOS token
+        #     rewards.append(None)
+        #     continue
+        if sol[:1] != "$":
+            sol = "$" + sol + "$"
         gold_parsed = parse(
             sol,
             extraction_mode="first_match",
@@ -88,6 +145,15 @@ def format_reward(completions, **kwargs):
     completion_contents = [completion[0]["content"] for completion in completions]
     matches = [re.match(pattern, content, re.DOTALL | re.MULTILINE) for content in completion_contents]
     return [1.0 if match else 0.0 for match in matches]
+
+
+def format_simple_reward(completions, **kwargs):
+    """Reward function that checks if the reasoning process is enclosed within <think> and </think> tags, while the final answer is enclosed within <answer> and </answer> tags."""    
+    # Only count </think> tag, because <think> tag is available in system prompt
+    # Inspired by https://github.com/knoveleng/open-rs/blob/2889c474949be4b3b778117a9026c919e517db0a/src/open_r1/rewards.py#L70
+    return [float(c[0]["content"].count("\n</think>\n") == 1) for c in completions]
+
+#    return [float(c[0]["content"].count("\n</think>\n") == 1) if ci[-1] == 151643 else None for c, ci in zip(completions, kwargs["completion_ids"])]
 
 
 def tag_count_reward(completions, **kwargs) -> list[float]:
@@ -646,7 +712,9 @@ def get_soft_overlong_punishment(max_completion_len, soft_punish_cache):
 def get_reward_funcs(script_args) -> list[Callable]:
     REWARD_FUNCS_REGISTRY = {
         "accuracy": accuracy_reward,
+        "simpleverify": simpleverify_reward,
         "format": format_reward,
+        "format_simple": format_simple_reward,
         "reasoning_steps": reasoning_steps_reward,
         "cosine": get_cosine_scaled_reward(
             min_value_wrong=script_args.cosine_min_value_wrong,
